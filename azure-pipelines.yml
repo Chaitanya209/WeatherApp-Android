@@ -1,0 +1,95 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  buildDir: '$(System.DefaultWorkingDirectory)/app/build'
+
+stages:
+- stage: Build
+  displayName: 'Build APK'
+  jobs:
+  - job: Build
+    displayName: 'Build Android APK'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.x'
+        addToPath: true
+
+    - task: DownloadSecureFile@1
+      name: keystore
+      inputs:
+        secureFile: 'my_keystore.jks'
+
+    - task: DownloadSecureFile@1
+      name: keyProperties
+      inputs:
+        secureFile: 'key.properties'
+
+    - script: |
+        echo "##vso[task.setvariable variable=ANDROID_HOME]$HOME/Library/Android/sdk"
+        echo "##vso[task.setvariable variable=ANDROID_SDK_ROOT]$HOME/Library/Android/sdk"
+        echo "##vso[task.setvariable variable=GRADLE_USER_HOME]$HOME/.gradle"
+        sudo apt-get update
+        sudo apt-get install -y openjdk-11-jdk
+        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+        echo "##vso[task.setvariable variable=JAVA_HOME]/usr/lib/jvm/java-11-openjdk-amd64"
+        wget https://dl.google.com/android/repository/commandlinetools-linux-7302050_latest.zip
+        mkdir -p $ANDROID_HOME/cmdline-tools
+        unzip -d $ANDROID_HOME/cmdline-tools commandlinetools-linux-7302050_latest.zip
+        yes | $ANDROID_HOME/cmdline-tools/tools/bin/sdkmanager --licenses
+        $ANDROID_HOME/cmdline-tools/tools/bin/sdkmanager "build-tools;30.0.3" "platforms;android-30" "platform-tools"
+      displayName: 'Install Android SDK'
+
+    - script: ./gradlew assembleRelease
+      displayName: 'Build APK'
+      workingDirectory: 'app'
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathToPublish: '$(buildDir)/outputs/apk/release'
+        artifactName: 'apk'
+        publishLocation: 'Container'
+
+- stage: Test
+  displayName: 'Run Espresso Tests'
+  dependsOn: Build
+  jobs:
+  - job: Test
+    displayName: 'Run Android Instrumented Tests'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.x'
+        addToPath: true
+
+    - script: |
+        echo "##vso[task.setvariable variable=ANDROID_HOME]$HOME/Library/Android/sdk"
+        echo "##vso[task.setvariable variable=ANDROID_SDK_ROOT]$HOME/Library/Android/sdk"
+        echo "##vso[task.setvariable variable=GRADLE_USER_HOME]$HOME/.gradle"
+        sudo apt-get update
+        sudo apt-get install -y openjdk-11-jdk
+        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+        echo "##vso[task.setvariable variable=JAVA_HOME]/usr/lib/jvm/java-11-openjdk-amd64"
+        wget https://dl.google.com/android/repository/commandlinetools-linux-7302050_latest.zip
+        mkdir -p $ANDROID_HOME/cmdline-tools
+        unzip -d $ANDROID_HOME/cmdline-tools commandlinetools-linux-7302050_latest.zip
+        yes | $ANDROID_HOME/cmdline-tools/tools/bin/sdkmanager --licenses
+        $ANDROID_HOME/cmdline-tools/tools/bin/sdkmanager "system-images;android-30;google_apis;x86_64" "emulator"
+        echo no | $ANDROID_HOME/tools/bin/avdmanager create avd -n test -k "system-images;android-30;google_apis;x86_64" --force
+        $ANDROID_HOME/emulator/emulator -avd test -no-window -no-audio -no-boot-anim &
+        android-wait-for-emulator
+        adb shell input keyevent 82
+      displayName: 'Setup Android Emulator'
+
+    - script: ./gradlew connectedAndroidTest
+      displayName: 'Run Espresso Tests'
+      workingDirectory: 'app'
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFiles: '**/TEST-*.xml'
+        testRunTitle: 'Espresso Test Results'
